@@ -9,6 +9,7 @@
 import codecs
 import copy
 import sys
+from datetime import datetime, timedelta
 from collections import defaultdict
 
 from bitstring import BitArray
@@ -16,7 +17,7 @@ from bitstring import BitArray
 
 class Options:
     FORCE_1K = False
-
+    UID_LENGTH = 4
 
 if len(sys.argv) == 1:
     sys.exit('''
@@ -127,6 +128,14 @@ def accbit_info(accbits, sector_size):
         access_bits[i] = accbits_for_blocknum(accbits, i)
     return access_bits
 
+def is_value_block(block):
+    b = bytes.fromhex(block)
+    return  (b[0] == b[8] and (b[0] ^ 0xFF) == b[4]) and \
+            (b[1] == b[9] and (b[1] ^ 0xFF) == b[5]) and \
+            (b[2] == b[10] and (b[2] ^ 0xFF) == b[6]) and \
+            (b[3] == b[11] and (b[3] ^ 0xFF) == b[7]) and \
+            (b[12] == b[14] and b[13] == b[15] and \
+            (b[12] ^ 0xFF) == b[13])
 
 def print_info(data):
     blocksmatrix = []
@@ -185,11 +194,36 @@ def print_info(data):
 
         blocksmatrix[c][sector_size] = keyA + accbits + keyB
 
+    if Options.UID_LENGTH == 4:
+        sakStart = Options.UID_LENGTH * 2 + 2
+    else:
+        sakStart = Options.UID_LENGTH * 2
+
     print("File size: %d bytes. Expected %d sectors" % (len(data), sector_number))
-    print("\n\tUID:  " + blocksmatrix[0][0][0:8])
+    if Options.UID_LENGTH == 4:
+        print("\n\tUID:  " + blocksmatrix[0][0][0:8])
+    else:
+        print("\n\tUID:  " + blocksmatrix[0][0][0:14])
     print("\tBCC:  " + blocksmatrix[0][0][8:10])
-    print("\tSAK:  " + blocksmatrix[0][0][10:12])
-    print("\tATQA: " + blocksmatrix[0][0][12:14])
+    print("\tSAK:  " + blocksmatrix[0][0][sakStart:sakStart + 2])
+    print("\tATQA: " + blocksmatrix[0][0][sakStart + 2:sakStart + 6])
+    # Code taken from https://github.com/ikarus23/MifareClassicTool
+    try:
+        year = int(blocksmatrix_clear[0][0][30:32])
+        week = int(blocksmatrix_clear[0][0][28:30])
+        now = datetime.now().year - 2000
+        if year >= 0 and year <= now and week >= 1 and week <= 53:
+            # "fromisocalendar" available only in >= Python 3.8
+            try:
+                calendar = datetime.fromisocalendar(year + 2000, week, 1)
+                startDate = calendar.strftime("%d.%m.%Y")
+                endDate = (calendar + timedelta(days=6)).strftime("%d.%m.%Y")
+                print("\tYear of manufacture: Between {} and {}".format(startDate, endDate))
+            except:
+                pass
+    except:
+        pass
+
     print("                   %sKey A%s    %sAccess Bits%s    %sKey B%s" % (
         bashcolors.RED, bashcolors.ENDC, bashcolors.GREEN, bashcolors.ENDC, bashcolors.BLUE, bashcolors.ENDC))
     print("╔═════════╦═══════╦══════════════════════════════════╦════════╦═════════════════════════════════════╗")
@@ -224,6 +258,9 @@ def print_info(data):
             else:
                 qn = ""
 
+            if is_value_block(blocksmatrix_clear[q][z]):
+                blocksmatrix[q][z] = bashcolors.WARNING + blocksmatrix_clear[q][z] + bashcolors.ENDC
+
             print("║    %-5s║  %-3d  ║ %s ║  %s   ║ %-35s ║ %s" % (qn, block_number, blocksmatrix[q][z],
                                                                    accbits, permissions,
                                                                    decode(blocksmatrix_clear[q][z])))
@@ -245,6 +282,10 @@ def main(args):
     if args[0] == '-1':
         args.pop(0)
         Options.FORCE_1K = True
+
+    if args[0] == "-7":
+        args.pop(0)
+        Options.UID_LENGTH = 7
 
     filename = args[0]
     with open(filename, "rb") as f:
